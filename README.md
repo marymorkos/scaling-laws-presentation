@@ -188,6 +188,10 @@ python scaling_laws_extended.py
 
 Both scripts are self-contained and require only NumPy and Matplotlib (no GPU needed).
 
+![Scaling Laws Core Demo](scaling_laws_demo.png)
+
+![Scaling Laws Extended Analysis](scaling_laws_extended.png)
+
 ---
 
 ## Repo Structure
