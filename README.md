@@ -1,201 +1,222 @@
 # Scaling Laws for Neural Language Models
-**Kaplan, J., McCandlish, S., Henighan, T., Brown, T. B., Chess, B., Child, R., Gray, S., Radford, A., Wu, J., & Amodei, D. (2020)**  
+
+**Kaplan, J., McCandlish, S., Henighan, T., Brown, T. B., Chess, B., Child, R., Gray, S., Radford, A., Wu, J., & Amodei, D. (2020)**
 *OpenAI — arXiv:2001.08361*
 
 ---
 
 ## Overview
 
-This paper investigates how the performance of Transformer-based language models depends on three key factors:
+This paper establishes that the cross-entropy loss of autoregressive Transformer language models obeys **smooth power-law relationships** with three scale factors — model size **N**, dataset size **D**, and training compute **C** — spanning over seven orders of magnitude. Architectural hyperparameters (depth, width, attention heads) have negligible effect once total non-embedding parameter count is held constant.
 
-- **N** — Number of model parameters (excluding embeddings)
-- **D** — Dataset size in tokens
-- **C** — Compute budget used during training (measured in PF-days)
-
-The central finding: **performance follows smooth power-law relationships with each of these factors, spanning over seven orders of magnitude.** Architectural details like depth vs. width matter very little — scale is what drives improvement.
-
-The most influential practical conclusion: **when given a fixed compute budget, you should train a much larger model and stop early, rather than training a smaller model to convergence.**
-
-This paper directly informed the scaling strategy behind GPT-3 and subsequent large language models.
+The central practical finding: **under a fixed compute budget, optimal performance is achieved by training a very large model on a modest amount of data, stopping well before convergence**, rather than training a smaller model to completion. This insight directly informed the design and training strategy of GPT-3 (Brown et al., 2020).
 
 ---
 
-## Architecture Overview (Pseudocode)
+## Key Equations
 
-This paper does not introduce a new model architecture. Instead, it introduces a **scaling law framework** — a predictive system for language model performance. Below is a formal pseudocode representation of the framework.
+The six power-law relations from Sections 1–6 of the paper are summarized below. All exponents (α) are empirically fitted; scale constants (subscript c) are tokenization-dependent and carry no fundamental meaning.
+
+| # | Relation | Equation | Constants | Reference |
+|---|----------|----------|-----------|-----------|
+| 1 | Loss vs. parameters | L(N) = (N_c / N)^α_N | α_N = 0.076, N_c = 8.8 × 10¹³ | Eq. 1.1 |
+| 2 | Loss vs. data | L(D) = (D_c / D)^α_D | α_D = 0.095, D_c = 5.4 × 10¹³ | Eq. 1.2 |
+| 3 | Loss vs. compute | L(C_min) = (C_c / C_min)^α_C | α_C = 0.050, C_c = 3.1 × 10⁸ | Eq. 1.3 |
+| 4 | Joint loss (N, D) | L(N, D) = [(N_c/N)^(α_N/α_D) + D_c/D]^α_D | (combines #1, #2) | Eq. 1.5 |
+| 5 | Training curve (N, S) | L(N, S) = (N_c/N)^α_N + (S_c/S_min)^α_S | α_S ≈ 0.76, S_c ≈ 2.1 × 10³ | Eq. 1.6 |
+| 6 | Critical batch size | B_crit(L) = B* / L^(1/α_B) | B* ≈ 2 × 10⁸, α_B ≈ 0.21 | Eq. 1.4 |
+
+**Optimal compute allocation** (Section 6): given budget C_min, the optimal split is N_opt ∝ C^0.73, B_opt ∝ C^0.24, S_opt ∝ C^0.03 — almost all additional compute should go to larger models, not more training steps.
+
+**Overfitting condition**: to avoid degradation when scaling N, the dataset must satisfy D ≳ 5000 · N^0.74 (sublinear growth).
+
+---
+
+## Architecture Pseudocode
+
+The paper does not introduce a new architecture; it proposes a **predictive scaling framework** for decoder-only Transformers. The pseudocode below formalizes the experimental methodology and the fitted laws.
 
 ```
-# ============================================================
-# SCALING LAWS FRAMEWORK — Kaplan et al. (2020)
-# ============================================================
+ALGORITHM  ScalingLawFramework
+────────────────────────────────────────────────────────────
+INPUT
+  1.  N  : int          — non-embedding parameters
+  2.  D  : int          — dataset size (tokens)
+  3.  C  : float        — compute budget (PF-days), C ≈ 6·N·B·S
+  4.  S  : int          — number of gradient steps
+  5.  B  : int          — batch size (tokens per step)
 
-# --- INPUTS ---
-N  ← number of non-embedding model parameters
-D  ← dataset size in tokens
-C  ← total training compute (PF-days), where C ≈ 6 * N * B * S
-     (B = batch size, S = training steps)
+CONSTANTS  (fitted from WebText2 experiments)
+  6.  α_N  = 0.076      — loss exponent for model size
+  7.  α_D  = 0.095      — loss exponent for dataset size
+  8.  α_C  = 0.050      — loss exponent for compute
+  9.  α_S  = 0.76       — loss exponent for training steps
+ 10.  α_B  = 0.21       — loss exponent for batch size
+ 11.  N_c  = 8.8×10¹³   — parameter scale constant
+ 12.  D_c  = 5.4×10¹³   — token scale constant
+ 13.  C_c  = 3.1×10⁸    — compute scale constant
+ 14.  S_c  = 2.1×10³    — steps scale constant
+ 15.  B*   = 2.0×10⁸    — batch size constant
 
-# --- CORE POWER LAW EQUATIONS ---
+INDIVIDUAL POWER LAWS
+ 16.  L(N)    ← (N_c / N)^α_N               — convergence loss
+ 17.  L(D)    ← (D_c / D)^α_D               — data-limited loss
+ 18.  L(C)    ← (C_c / C)^α_C               — compute-optimal loss
 
-# Loss as a function of model size (trained to convergence, infinite data)
-L(N) = (Nc / N)^αN
-    where αN ≈ 0.076,  Nc ≈ 8.8e13 parameters
+JOINT AND TRAINING-CURVE LAWS
+ 19.  L(N,D)  ← [(N_c/N)^(α_N/α_D) + D_c/D]^α_D
+ 20.  L(N,S)  ← (N_c/N)^α_N + (S_c/S_min)^α_S
 
-# Loss as a function of dataset size (large model, early stopping)
-L(D) = (Dc / D)^αD
-    where αD ≈ 0.095,  Dc ≈ 5.4e13 tokens
+CRITICAL BATCH SIZE
+ 21.  B_crit(L) ← B* / L^(1/α_B)
 
-# Loss as a function of compute (optimally allocated)
-L(Cmin) = (Cmin_c / Cmin)^αCmin
-    where αCmin ≈ 0.050,  Cmin_c ≈ 3.1e8 PF-days
+OPTIMAL ALLOCATION  (given budget C_min)
+ 22.  N_opt  ← k_N · C_min^0.73             — most budget → bigger model
+ 23.  B_opt  ← k_B · C_min^0.24             — moderate batch growth
+ 24.  S_opt  ← k_S · C_min^0.03             — steps barely increase
 
-# --- JOINT SCALING LAW (N and D together) ---
-L(N, D) = [ (Nc/N)^(αN/αD) + (Dc/D) ]^αD
-    # When D → ∞, this reduces to L(N)
-    # When N → ∞, this reduces to L(D)
+OVERFITTING GUARD
+ 25.  REQUIRE  D ≥ 5000 · N^0.74
 
-# --- TRAINING CURVE SCALING (N and training steps S) ---
-L(N, S) = (Nc/N)^αN + (Sc/Smin)^αS
-    where αS ≈ 0.76,  Sc ≈ 2.1e3 steps
+EXPERIMENTAL PROTOCOL
+ 26.  FOR EACH scale factor X ∈ {N, D, C}:
+ 27.      FIX the other two factors at non-limiting values
+ 28.      TRAIN models across 6–8 orders of magnitude of X
+ 29.      MEASURE cross-entropy loss on WebText2 test set
+ 30.      FIT power law: L(X) = (X_c / X)^α_X
+ 31.      VERIFY R² ≥ 0.95 across all scales
 
-# --- OPTIMAL COMPUTE ALLOCATION ---
-# Given a fixed budget Cmin, solve for optimal N, B, S:
-
-FUNCTION optimal_allocation(Cmin):
-    N_opt  ∝ Cmin^0.73   # Model size grows fastest
-    B_opt  ∝ Cmin^0.24   # Batch size grows moderately  
-    S_opt  ∝ Cmin^0.03   # Training steps barely change
-
-    RETURN N_opt, B_opt, S_opt
-
-# KEY INSIGHT: As compute increases, spend it on BIGGER MODELS
-# not more training steps. Stop training significantly before convergence.
-
-# --- CRITICAL BATCH SIZE ---
-Bcrit(L) = B* / L^(1/αB)
-    where B* ≈ 2e8 tokens,  αB ≈ 0.21
-    # Bcrit depends only on loss, not model size
-
-# --- OVERFITTING CONDITION ---
-# To avoid overfitting when scaling model size:
-D ≳ (5e3) * N^0.74
-    # Dataset only needs to grow sublinearly with model size
-
-# --- EXPERIMENTAL METHODOLOGY ---
-FOR each scale factor X in {N, D, C}:
-    fix the other two factors
-    train models across 6-8 orders of magnitude of X
-    measure cross-entropy loss L on WebText2 test set
-    fit power-law: L(X) = (Xc / X)^αX
-    verify trend holds across all scales
-
-# --- ARCHITECTURE TESTED ---
-Model: Decoder-only Transformer (GPT-style)
-       [VSP+17, same as GPT-2 architecture]
-Optimizer: Adam (small models), Adafactor (>1B params)
-Context: 1024 tokens
-Dataset: WebText2 (22B tokens, web text filtered by Reddit karma)
-Models: 768 params → 1.5 billion params
+ARCHITECTURE UNDER TEST
+ 32.  Decoder-only Transformer (GPT-2 style, Vaswani et al. 2017)
+ 33.  Optimizer: Adam (small), Adafactor (>1B params)
+ 34.  Context length: 1024 tokens
+ 35.  Dataset: WebText2 (22B tokens, Reddit-filtered web text)
+ 36.  Model range: 768 parameters → 1.5B parameters
+────────────────────────────────────────────────────────────
 ```
-
-### How This Differs from Prior Work
-
-| Aspect | Prior Assumption | Kaplan et al. Finding |
-|---|---|---|
-| Architecture shape | Depth/width matter significantly | Minimal effect when N is fixed |
-| Training strategy | Train small models to convergence | Train large models, stop early |
-| Data scaling | Linear with model size | Sublinear: D ∝ N^0.74 |
-| Performance prediction | Hard to predict | Predictable power laws |
-| Optimal compute use | Unclear | Spend on model size, not steps |
 
 ---
 
 ## Critical Analysis
 
-### What the paper does well
-- Massive empirical scope — hundreds of training runs across 8 orders of magnitude
-- Power-law fits are remarkably clean and consistent
-- Practical, actionable conclusions for compute allocation
+### Strengths
 
-### Limitations and open questions
+- **Massive empirical scope**: hundreds of training runs across eight orders of magnitude yield remarkably clean power-law fits (R² > 0.95), providing a quantitative foundation where only heuristics existed before.
+- **Actionable compute allocation**: the optimal-allocation result (§6) gives practitioners a concrete formula for deciding model size given a compute budget.
+- **Architecture invariance**: the finding that depth-to-width ratio barely affects loss (at fixed N) simplified model-design decisions across the field.
 
-**1. No theoretical foundation**  
-The authors explicitly admit they have no deep theory for *why* these power laws exist. They describe it as analogous to empirical gas laws before thermodynamics existed. Without theory, we don't know when or why the laws might break down.
+### Limitations
 
-**2. Single architecture, single dataset**  
-All experiments use decoder-only Transformers on WebText2. It's unclear whether the exact exponents transfer to other architectures (BERT-style encoders, diffusion models, MoE models) or other data domains (code, images, clinical text).
+1. **Chinchilla correction (Hoffmann et al., 2022)**
+   Kaplan et al. recommend allocating most compute to larger N with relatively little data. DeepMind's Chinchilla study, using tighter experimental controls, found that **model size and data should scale roughly equally** (N_opt ∝ C^0.50 vs. Kaplan's C^0.73). This correction implies GPT-3 was substantially undertrained for its size and reshaped training strategies for GPT-4, Gemini, and Llama.
 
-**3. The Chinchilla correction (2022)**  
-Hoffmann et al. (DeepMind, 2022) reran scaling law experiments with better-controlled methodology and found that Kaplan et al. *underestimated* the importance of data*. The original paper suggested training very large models on relatively little data. Chinchilla showed that **model size and data should scale equally** — a significant correction that changed how GPT-4 and subsequent models were trained.
+2. **Emergent abilities fall outside the framework**
+   Smooth power laws predict continuous, gradual improvement. Wei et al. (2022) demonstrated that certain capabilities (multi-step reasoning, chain-of-thought) appear **discontinuously** at specific scale thresholds. Scaling laws as formulated here cannot predict or explain such phase transitions.
 
-**4. Environmental costs not addressed**  
-The paper advocates for ever-larger models but does not address the environmental cost of training at scale. A single large training run can emit CO2 equivalent to multiple transatlantic flights. As scaling laws encourage bigger models, this becomes a serious omission.
+3. **No theoretical foundation**
+   The authors explicitly compare their results to empirical gas laws before thermodynamics: the fits are excellent, but there is no first-principles explanation for *why* these exponents take the values they do, or under what conditions the laws break down. This limits extrapolation confidence.
 
-**5. Emergent capabilities not predicted**  
-The smooth power-law framing misses a phenomenon discovered later: at certain scale thresholds, models suddenly gain qualitatively new capabilities (Wei et al., 2022). Power laws suggest smooth, predictable improvement — but emergence is discontinuous and was not anticipated here.
+4. **Single-architecture limitation**
+   All experiments use decoder-only Transformers trained on English web text. Whether the same exponents transfer to encoder-decoder models, mixture-of-experts, state-space models (Mamba), vision transformers, or non-English corpora remains an open empirical question.
 
-**6. Fixed tokenization and vocabulary**  
-The authors note that constants like Nc and Dc depend on vocabulary size and tokenization and "have no fundamental meaning." This limits the generalizability of the precise numerical values.
+5. **Environmental and societal costs unaddressed**
+   The paper advocates for ever-larger models but does not quantify or discuss the carbon footprint, energy consumption, or access inequity that follow from its recommendations.
+
+6. **Tokenization-dependent constants**
+   The scale constants N_c, D_c, C_c have "no fundamental meaning" (authors' words) and change with vocabulary and tokenization, limiting cross-study comparability.
 
 ---
 
 ## Impact
 
-### Immediate impact (2020)
-- **Directly motivated GPT-3** (Brown et al., 2020) — 175B parameters, trained the same year
-- Gave AI labs a **quantitative roadmap** for compute allocation
-- Shifted the field from "train to convergence" to "train large, stop early"
-- Established that **architecture tweaks matter far less than scale**
+**Immediate (2020)**
+- Directly motivated **GPT-3** (175B parameters, Brown et al., 2020)
+- Gave labs a quantitative roadmap: predictable loss → predictable ROI on compute
+- Shifted the training paradigm from "train small to convergence" to "train large, stop early"
 
-### Medium-term impact
-- Inspired **Chinchilla (2022)** which corrected the data/model balance
-- Motivated research into **compute-optimal training**
-- Influenced investment decisions — if performance is predictable, ROI on compute is predictable
-- Sparked debate about whether scale is the only path forward
+**Medium-term (2021–2023)**
+- Inspired the **Chinchilla correction** (Hoffmann et al., 2022), which rebalanced data/model scaling
+- Established "scaling law" as standard vocabulary in ML research
+- Influenced multi-billion-dollar compute investment decisions at OpenAI, Google, and Meta
 
-### Present and future
-- Scaling laws have been extended to **multimodal models**, **code**, and **reasoning tasks**
-- The paper's framework is now standard vocabulary in ML research
-- **Efficiency research** (LoRA, quantization, MoE, Mamba) is partly a response to the environmental and financial costs of the scaling-first strategy this paper advocates
-- The question of whether scaling laws hold indefinitely — or whether we need architectural innovation — is one of the most active debates in AI today
+**Ongoing**
+- Scaling laws have been extended to code, multimodal models, reasoning, and reinforcement learning from human feedback (RLHF)
+- Efficiency techniques (LoRA, quantization, MoE, distillation) are partly a response to the costs implied by always scaling up
+- Whether scaling laws hold indefinitely — or whether architectural innovation is required — remains one of the central debates in AI research
 
 ---
 
-## Two Discussion Questions
+## Discussion Questions
 
-**Question 1:**  
-The paper shows that for a fixed compute budget, you should train a much larger model and stop early rather than training a smaller model to convergence. Why do you think most practitioners *before* this paper were doing the opposite — and what would have to change in your own workflow or intuitions to adopt the compute-efficient approach?
+**Question 1: Compute allocation and practitioner intuitions**
+The paper shows that under a fixed compute budget, optimal performance comes from training a very large model and stopping early — not from training a smaller model to convergence. Why do you think most practitioners *before* this paper followed the opposite strategy, and what experimental or institutional factors made the "train to convergence" approach seem natural?
 
-**Question 2:**  
-Chinchilla (2022) found that Kaplan et al. underweighted the importance of training data — suggesting models like GPT-3 were undertrained relative to their size. Given that both papers use empirical power-law fitting on Transformers, what does it tell us about relying on empirical scaling laws without theoretical foundations?
+**Question 2: Empirical laws without theory**
+Both Kaplan et al. (2020) and Hoffmann et al. (2022) fit power laws to empirical data on Transformers, yet they reach meaningfully different conclusions about optimal data/model balance. What does this divergence reveal about the reliability of empirical scaling laws in the absence of a theoretical foundation, and how should the field navigate this uncertainty?
 
 ---
 
 ## Resource Links
 
-1. **Original Paper** — https://arxiv.org/abs/2001.08361
-2. **Chinchilla Scaling Laws (DeepMind, 2022)** — https://arxiv.org/abs/2203.15556 *(the key correction to this paper)*
-3. **GPT-3 Paper (direct application of these laws)** — https://arxiv.org/abs/2005.14165
-4. **Emergent Abilities of Large Language Models (Wei et al., 2022)** — https://arxiv.org/abs/2206.07682 *(what scaling laws missed)*
-5. **The FLOPs Calculator — Understanding Compute** — https://github.com/google-research/google-research/tree/master/scaling_transformer_inference_efficiency
+1. **Original paper** — [arXiv:2001.08361](https://arxiv.org/abs/2001.08361)
+2. **Chinchilla scaling laws** (Hoffmann et al., 2022) — [arXiv:2203.15556](https://arxiv.org/abs/2203.15556)
+3. **GPT-3** (Brown et al., 2020) — [arXiv:2005.14165](https://arxiv.org/abs/2005.14165)
+4. **Emergent abilities of LLMs** (Wei et al., 2022) — [arXiv:2206.07682](https://arxiv.org/abs/2206.07682)
+5. **Scaling data-constrained language models** (Muennighoff et al., 2023) — [arXiv:2305.16264](https://arxiv.org/abs/2305.16264)
+6. **Scaling laws for autoregressive generative modeling** (Henighan et al., 2020) — [arXiv:2010.14701](https://arxiv.org/abs/2010.14701)
 
 ---
 
-## Code Demonstration
+## How to Run
 
-See `scaling_demo.py` — a Python script that empirically demonstrates the power-law relationship between model size and loss, and visualizes the compute-efficient frontier.
+```bash
+# Clone and enter the repository
+git clone <repo-url>
+cd scaling-laws-presentation
+
+# Install dependencies
+pip install -r requirements.txt
+
+# Run the core demo (3 power laws + compute frontier)
+python scaling_demo.py
+# → outputs/scaling_laws_demo.png
+
+# Run the extended analysis (overfitting, training curves, batch size)
+python scaling_laws_extended.py
+# → outputs/scaling_laws_extended.png
+```
+
+Both scripts are self-contained and require only NumPy and Matplotlib (no GPU needed).
+
+---
+
+## Repo Structure
+
+```
+scaling-laws-presentation/
+├── README.md                    ← This file
+├── scaling_demo.py              ← Core power laws + compute frontier (5 plots)
+├── scaling_laws_extended.py     ← Advanced results: overfitting, training curves, batch size
+├── requirements.txt             ← Python dependencies
+├── .gitignore                   ← Standard Python ignores
+└── outputs/
+    ├── scaling_laws_demo.png    ← Generated by scaling_demo.py
+    └── scaling_laws_extended.png← Generated by scaling_laws_extended.py
+```
 
 ---
 
 ## Citation
 
-```
+**BibTeX**
+```bibtex
 @article{kaplan2020scaling,
-  title={Scaling Laws for Neural Language Models},
-  author={Kaplan, Jared and McCandlish, Sam and Henighan, Tom and Brown, Tom B and Chess, Benjamin and Child, Rewon and Gray, Scott and Radford, Alec and Wu, Jeffrey and Amodei, Dario},
-  journal={arXiv preprint arXiv:2001.08361},
-  year={2020}
+  title   = {Scaling Laws for Neural Language Models},
+  author  = {Kaplan, Jared and McCandlish, Sam and Henighan, Tom and Brown, Tom B. and Chess, Benjamin and Child, Rewon and Gray, Scott and Radford, Alec and Wu, Jeffrey and Amodei, Dario},
+  journal = {arXiv preprint arXiv:2001.08361},
+  year    = {2020}
 }
 ```
 
-Kaplan, J., McCandlish, S., Henighan, T., Brown, T. B., Chess, B., Child, R., Gray, S., Radford, A., Wu, J., & Amodei, D. (2020). *Scaling Laws for Neural Language Models*. arXiv:2001.08361.
+**APA**
+Kaplan, J., McCandlish, S., Henighan, T., Brown, T. B., Chess, B., Child, R., Gray, S., Radford, A., Wu, J., & Amodei, D. (2020). Scaling laws for neural language models. *arXiv preprint arXiv:2001.08361*. https://arxiv.org/abs/2001.08361
